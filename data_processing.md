@@ -13,7 +13,7 @@ module load trimgalore
 module load fastqc
 
 # Change to the project directory, exit if it fails
-cd /hb/groups/kelley_training/lexi/BearBlood_RNAseq || exit 1
+cd /path/to/working/directory || exit 1
 
 # Create output directory for trimmed fastqs and FastQC results
 mkdir -p 1_trim/trim_q0/fastqc
@@ -50,6 +50,63 @@ trim_galore \
     --output_dir 1_trim/trim_q0_q24 \
     1_trim/trim_q0/"${fastq}_trimmed.fq.gz"
 ```
+# 2. Subsample reads
+Set # of reads threshold at half the STDev and randomly subsample samples with greater number of reads than the threshold down to improve read number distribution.
+
+```bash
+# Load necessary modules
+module load seqtk
+
+# Change to working directory
+cd /path/to/working/directory || exit 1
+
+# Get line corresponding to this array task
+LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" bearBlood_RNAseq_samples.tsv)
+
+# Extract FASTQ file name and read directory
+fastq=$(echo "${LINE}" | awk '{print $1}')
+readDir=$(echo "${LINE}" | awk '{print $2}')
+
+mkdir -p 1_trim/subsampled_fastqs_sd
+
+trim_fq="1_trim/trim_q0_q24/${fastq}_trimmed_trimmed.fq.gz"
+out="1_trim/subsampled_fastqs_sd/${fastq}_subsampled_sd.fq.gz"
+
+# Count reads in FASTQ
+reads=$(seqtk size "$trim_fq" | awk '{print $1}')
+
+if [[ "$fastq" == *"Non-Depleted"* ]]; then
+    # Non-depleted samples: cap at 136M
+    if [ "$reads" -gt 136000000 ]; then
+        echo "$fastq has $reads reads (>136M) -- subsampling to 136M..."
+        seqtk sample -s100 "$trim_fq" 136000000 | gzip > "$out"
+    else
+        echo "$fastq has $reads reads (<=136M) -- keeping as-is"
+        cp "$trim_fq" "$out"
+    fi
+
+elif [[ "$fastq" == *"Depleted"* ]]; then
+    # Depleted samples: cap at 21.25M
+    if [ "$reads" -gt 21250000 ]; then
+        echo "$fastq has $reads reads (>21.25M) -- subsampling to 21.25M..."
+        seqtk sample -s100 "$trim_fq" 21250000 | gzip > "$out"
+    else
+        echo "$fastq has $reads reads (<=21.25M) -- keeping as-is"
+        cp "$trim_fq" "$out"
+    fi
+fi
+
+# Create directory for FastQC output
+mkdir -p 1_trim/subsampled_fastqs_sd/fastqc 
+
+# Load required modules for FastQC
+module load fastqc
+
+# Run FastQC on the subsampled FASTQ file
+fastqc --noextract --nogroup --outdir 1_trim/subsampled_fastqs_sd/fastqc "$out"
+
+```
+
 # 2. Mapping reads to ref genome
 Use STAR aligner to map to brown bear genome (GCA_023065955.2)[https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_023065955.2/]
 - Keep only uniquely mapped reads
@@ -60,7 +117,7 @@ Use STAR aligner to map to brown bear genome (GCA_023065955.2)[https://www.ncbi.
 module load star
 
 # Change to working directory
-cd /hb/groups/kelley_training/lexi/BearBlood_RNAseq || exit 1
+cd /path/to/working/directory|| exit 1
 
 # Create output directory for STAR mapped files
 mkdir -p 2_STAR/mapped
@@ -71,33 +128,38 @@ LINE=$(sed -n "${SLURM_ARRAY_TASK_ID}p" bearBlood_RNAseq_samples.tsv)
 fastq=$(echo "${LINE}" | awk '{print $1}')
 
 # Run STAR
-# max read length is ~331, so sjdbOverhang should be set to 330 (max read length - 1)
+# Index the genome before running STAR on the trimmed fastq files
+# max read length is 414, so sjdbOverhang should be set to 413 (max read length - 1)
 # indexed genome using:
+# genomeFASTA="/path/to/brownBear/genome/fasta.fna"
+# genomeGTF="/path/to/brownBear/genomeAnnotation/gtfFile.gtf"
+
 # STAR --runMode genomeGenerate \
 #    --runThreadN 12 \
 #    --genomeDir indexed_genome \
-#    --genomeFastaFiles "${fastaFile}" \
-#    --sjdbGTFfile "${gtfFile}" \
-#    --sjdbOverhang 330
+#    --genomeFastaFiles "${genomeFASTA}" \
+#    --sjdbGTFfile "${genomeGTF}" \
+#    --sjdbOverhang 413
 
 STAR \
     --runThreadN 4 \
     --genomeDir 2_STAR/indexed_genome \
-    --sjdbGTFfile /hb/home/aenstrom/ursus_arctos_genome/GCF_023065955.2_UrsArc2.0_genomic.gtf \
-    --sjdbOverhang 330 \
+    --sjdbGTFfile "${gtfFile}" \
+    --sjdbOverhang 413 \
     --outFilterMultimapNmax 1 \
     --twopassMode Basic \
-    --readFilesIn 1_trim/trim_31/"${fastq}_trimmed_trimmed.fq.gz" \
+    --readFilesIn 1_trim/subsampled_fastqs_sd/"${fastq}_subsampled_sd.fq.gz" \
     --readFilesCommand zcat \
     --outFileNamePrefix 2_STAR/mapped/"${fastq}_" \
     --outSAMtype BAM SortedByCoordinate
+
 ```
 
 # 3. Quantify gene-level read counts
 Use featureCounts from Subread
 ```bash
 # Change to working directory
-cd /hb/groups/kelley_training/lexi/BearBlood_RNAseq || exit 1
+cd /path/to/working/directory || exit 1
 
 # Create output directory for STAR mapped files
 mkdir -p 3_featureCounts
@@ -112,10 +174,12 @@ mkdir -p 3_featureCounts
 # -o specifies the output file for the counts
 # 2_STAR/mapped/*_Aligned.sortedByCoord.out.bam specifies the input BAM files
 
+genomeFASTA="/path/to/brownBear/genome/fasta.fna"
+genomeGTF="/path/to/brownBear/genomeAnnotation/gtfFile.gtf"
+
 featureCounts -F 'GTF' -T 4 -t exon -g gene_id \
-    -G /hb/home/aenstrom/ursus_arctos_genome/GCF_023065955.2_UrsArc2.0_genomic.fna \
-    -a /hb/home/aenstrom/ursus_arctos_genome/GCF_023065955.2_UrsArc2.0_genomic.gtf \
-    -o 3_featureCounts/brownBear_Blood_RNAseq_rawCounts_q0_09.16.2025.txt \
+    -G "${genomeFASTA}" \
+    -a "${genomeGTF}" \
+    -o 3_featureCounts/brownBear_Blood_RNAseq_rawCounts_q0_q24_sd.txt \
     2_STAR/mapped/*_Aligned.sortedByCoord.out.bam
 ```
-Etc
