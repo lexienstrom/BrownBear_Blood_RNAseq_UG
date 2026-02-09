@@ -107,7 +107,7 @@ fastqc --noextract --nogroup --outdir 1_trim/subsampled_fastqs_sd/fastqc "$out"
 
 ```
 
-# 2. Mapping reads to ref genome
+# 3. Mapping reads to ref genome
 Use STAR aligner to map to brown bear genome (GCA_023065955.2)[https://www.ncbi.nlm.nih.gov/datasets/genome/GCF_023065955.2/]
 - Keep only uniquely mapped reads
 - Convert to sorted BAM
@@ -155,7 +155,7 @@ STAR \
 
 ```
 
-# 3. Quantify gene-level read counts
+# 4. Quantify gene-level read counts
 Use featureCounts from Subread
 ```bash
 # Change to working directory
