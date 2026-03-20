@@ -1,0 +1,675 @@
+---
+title: "UG_BearBlood_RNASeq_analysis_09.30.2025"
+date: "2025-09-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(ggplot2)
+library(tibble)
+getwd()
+```
+
+# Load Data
+```{r}
+# Load Raw Counts matrix from FeatureCounts
+featureCounts_cts <- read.delim("brownBear_Blood_RNAseq_rawCounts_q0_q24_sd_413_09.26.2025.txt", header = TRUE, comment.char = "#")
+gene_lengths <- featureCounts_cts %>% dplyr::select(Geneid, Length)
+
+# Load metadata
+metadata <- read_tsv("bearBlood_RNASeq_UG_metadata_v2.tsv", col_names = T)
+metadata$season <- str_split_fixed(metadata$sample_name,"_",3)[,3]
+season_order <- c(
+  "Active" = 1, # June (6) -- 1 -- day 1 -- 0
+  "Fall" = 120, # October(10) -- 4 -- day 120 --3.9
+  "Hibernation" = 189, # January(1) -- 7 -- day 189 --6.2
+  "Spring" = 259, # March(3) -- 9 -- day 259--8.5
+  "SpringT2" = 273 # March 2 weeks later(4) -- 10 -- day 273  --8.96
+)
+metadata <- metadata %>% mutate(time = season_order[season],bear = str_split_fixed(sample_name, "_", 3)[, 2])
+
+metadata_nondepleted <- metadata %>%
+  filter(str_split_fixed(sample_name, "_", 3)[, 1] == "Nondepleted")
+write_csv(metadata_nondepleted, "nondepleted_metadata.csv")
+
+# Load Raw Counts Matrix with fixed sample names
+cts_fixed <- read.delim("brownBear_Blood_RNAseq_rawCounts_sd413_cleanHeaders_finalMatrix.txt", header = TRUE, comment.char = "#")
+
+metadata_nondepleted
+
+sum(metadata_nondepleted$season == "Spring")
+```
+## Dotplot and T-test of rRNA and hemogolbin
+```{r}
+cts <- cts_fixed
+
+rownames(cts) <- cts$Geneid
+cts <- cts %>% dplyr::select(-Geneid)
+
+rRNA_28S <- read.delim("ursus_arctos_28S_rRNA.txt", header = TRUE, comment.char = "#")
+rRNA_18S <- read.delim("ursus_arctos_18S_rRNA.txt", header = TRUE, comment.char = "#")
+
+rRNA_genes <- c(rRNA_28S$Symbol, rRNA_18S$Symbol)
+
+hemoglobin_genes <- c("LOC113248288",   # Hb beta
+                      "LOC113248289",   # Hb beta
+                      "LOC113245361",   # Hb alpha
+                      "LOC125283438",   # Hb alpha
+                      "HBM")            # Hb mu
+
+# Hemoglobin counts per sample
+hb_counts <- colSums(cts[rownames(cts) %in% hemoglobin_genes, ])
+total_counts <- colSums(cts)
+
+# Fraction (%)
+hb_fraction <- hb_counts / total_counts * 100
+
+df_hb2 <- data.frame(
+  sample = names(hb_fraction),
+  percent = hb_fraction
+)
+
+# Label condition
+df_hb2 <- df_hb2 %>%
+  mutate(
+    condition = if_else(grepl("^Depleted", sample), "Depleted", "Non-Depleted"),
+    rna = "Globin",
+    name = str_split_fixed(sample, "_", 4)[, 2],
+    season = str_split_fixed(sample, "_", 4)[, 3],
+    lab = paste0(name,"_",season)
+  )
+
+# rRNA counts per sample
+rrna_counts <- colSums(cts[rownames(cts) %in% rRNA_genes, ])
+total_counts <- colSums(cts)
+
+# Fraction (%)
+rna_fraction <- rrna_counts / total_counts * 100
+
+df_rna2 <- data.frame(
+  sample = names(rna_fraction),
+  percent = rna_fraction
+)
+
+# Label condition
+df_rna2 <- df_rna2 %>%
+  mutate(
+    condition = if_else(grepl("^Depleted", sample), "Depleted", "Non-Depleted"),
+    rna = "rRNA",
+    name = str_split_fixed(sample, "_", 4)[, 2],
+    season = str_split_fixed(sample, "_", 4)[, 3],
+    lab = paste0(name,"_",season)
+  )
+
+df_plot <- rbind(df_hb2, df_rna2)
+
+
+
+ggplot(df_plot, aes(x = condition, y = percent, fill = condition)) +
+  #geom_boxplot(alpha = 0.6, outlier.shape = NA) +
+  geom_jitter(width = 0.2, alpha = 0.7, size = 2, aes(color = condition)) +
+  facet_wrap(~rna) +
+  #geom_text(aes(label = lab), size = 3, check_overlap = TRUE) +
+  scale_y_log10() +
+  labs(
+    title = NULL,
+    x = "Condition",
+    y = "Percent of transcripts (%) log-scale"
+  ) +
+  scale_fill_manual(
+    values = c("Depleted" = "orange", "Non-Depleted" = "steelblue"),
+    labels = c("Depleted" = "rRNA/Globin Depleted",
+               "Non-Depleted" = "poly(A)-selected")
+  ) +
+  scale_color_manual(
+    values = c("Depleted" = "orange", "Non-Depleted" = "steelblue"),
+    labels = c("Depleted" = "rRNA/Globin Depleted",
+               "Non-Depleted" = "poly(A)-selected")
+  ) + 
+  labs(fill = "Library Type", color = "Library Type") +
+  scale_x_discrete(
+      labels = c(
+        "Depleted" = "rRNA/Globin Depleted",
+        "Non-Depleted" = "poly(A)-selected"
+      )
+    ) + 
+  theme_bw(base_size = 14) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)
+  )
+ggsave("depletion_vs_polyAselection.pdf", dpi=600,h=6,w=7)
+
+
+
+```
+
+
+# Data cleanup
+```{r}
+# Load rRNA genes and remove from counts matrix
+rRNA_28S <- read.delim("ursus_arctos_28S_rRNA.txt", header = TRUE, comment.char = "#")
+rRNA_18S <- read.delim("ursus_arctos_18S_rRNA.txt", header = TRUE, comment.char = "#")
+hemoglobin_genes <- c("LOC113248288",   # Hb beta
+                      "LOC113248289",   # Hb beta
+                      "LOC113245361",   # Hb alpha
+                      "LOC125283438"   # Hb alpha
+                      )           
+
+abundant_genes <- c(rRNA_28S$Symbol, rRNA_18S$Symbol)
+cts_fixed <- cts_fixed[(!cts_fixed$Geneid %in% abundant_genes), ] # there's 116 18S/28S rRNA genes in the counts matrix
+
+# Get a matrix of the gene names and their lengths for TPM
+cts_gene_lengths <- featureCounts_cts %>% dplyr::select(Geneid, Length)
+
+# Load y chromosome genes and remove from matrix
+y_chr <- read.delim("ursus_arctos_y_chr_genes.tsv")
+cts_fixed <- cts_fixed[!cts_fixed$Geneid %in% y_chr$Symbol, ] # There's 74 y-chromosome genes found in the counts matrix
+
+write_tsv(cts_fixed, "brownBear_Blood_RNAseq_rawCounts_cleanedUp_10.20.2025.tsv")
+
+x_chr <- read.delim("ursus_arctos_x_chr_genes.tsv")
+cts_x_chr <- cts_fixed[cts_fixed$Geneid %in% x_chr$Symbol, ]
+
+# Finalize counts marix for DESeq2
+rownames(cts_fixed) <- cts_fixed$Geneid
+cts_fixed <-  cts_fixed %>% dplyr::select(-Geneid)
+
+```
+
+## Correlation
+```{r}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+
+# ------------ TPM ------------------------------------------------------------
+gene_length_corr <- gene_lengths %>% 
+  filter(Geneid %in% rownames(cts_fixed))
+
+x <- cts_fixed / gene_length_corr$Length
+
+# Calculate column sums for normalization
+col_sums <- colSums(x, na.rm = TRUE)
+
+# Normalize to TPM scale
+tpm.mat <- t(t(x) * 1e6 / col_sums)
+
+# Convert to data frame
+tpm.df <- as.data.frame(tpm.mat)
+
+# Split depleted vs nondepleted
+tpm.depleted <- tpm.df %>% 
+  dplyr::select(starts_with("Depleted_"))
+
+new_names_dep <- paste0(
+  str_split_fixed(colnames(tpm.depleted), "_", 4)[,2], "_",
+  str_split_fixed(colnames(tpm.depleted), "_", 4)[,3]
+)
+colnames(tpm.depleted) <- new_names_dep
+
+tpm.nondepleted <- tpm.df %>% 
+  dplyr::select(starts_with("Nondepleted_"))
+
+new_names_nondep <- paste0(
+  str_split_fixed(colnames(tpm.nondepleted), "_", 4)[,2], "_",
+  str_split_fixed(colnames(tpm.nondepleted), "_", 4)[,3]
+)
+colnames(tpm.nondepleted) <- new_names_nondep
+
+# Add gene IDs
+tpm.depleted$gene    <- rownames(tpm.depleted)
+tpm.nondepleted$gene <- rownames(tpm.nondepleted)
+
+# ------------ median log2(TPM+1) per season ---------------------------------
+
+dep_long <- tpm.depleted %>%
+  pivot_longer(-gene, names_to = "sample", values_to = "dep") %>%
+  mutate(season = str_split_fixed(sample, "_", 2)[,2])
+
+nondep_long <- tpm.nondepleted %>%
+  pivot_longer(-gene, names_to = "sample", values_to = "nondep") %>%
+  mutate(season = str_split_fixed(sample, "_", 2)[,2])
+
+dep_season_median <- dep_long %>%
+  group_by(gene, season) %>%
+  summarise(med_tpm = median(dep, na.rm = TRUE), .groups = "drop") %>%
+  mutate(dep = log2(med_tpm + 1)) %>%
+  dplyr::select(gene, season, dep)
+
+nondep_season_median <- nondep_long %>%
+  group_by(gene, season) %>%
+  summarise(med_tpm = median(nondep, na.rm = TRUE), .groups = "drop") %>%
+  mutate(nondep = log2(med_tpm + 1)) %>%
+  dplyr::select(gene, season, nondep)
+
+# Merge depleted and nondepleted
+df_all <- left_join(
+  dep_season_median,
+  nondep_season_median,
+  by = c("gene", "season")
+)
+
+# ------------ fix season labels BEFORE correlations/plotting -----------------
+
+df_all <- df_all %>%
+  mutate(
+    season = recode(
+      season,
+      "Spring" = "Spring 1",
+      "SpringT2" = "Spring 2"
+    ),
+    season = factor(
+      season,
+      levels = c("Active", "Fall", "Hibernation", "Spring 1", "Spring 2")
+    )
+  )
+
+# ------------ Spearman correlations per season -------------------------------
+
+cors_stats <- df_all %>%
+  group_by(season) %>%
+  summarise(
+    rho = suppressWarnings(cor(nondep, dep, method = "spearman", use = "complete.obs")),
+    p = suppressWarnings(cor.test(nondep, dep, method = "spearman")$p.value),
+    .groups = "drop"
+  )
+
+# facet-specific annotation positions
+cor_spears_df <- cors_stats %>%
+  left_join(
+    df_all %>%
+      group_by(season) %>%
+      summarise(
+        x = min(nondep, na.rm = TRUE),
+        y = max(dep, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = "season"
+  ) %>%
+  mutate(
+    p_fmt = case_when(
+      is.na(p) ~ "NA",
+      p < 1e-3 ~ "< 0.001",
+      TRUE ~ formatC(p, format = "f", digits = 3)
+    ),
+    label = paste0("rho = ", sprintf("%.3f", rho), "\n", "p ", p_fmt)
+  )
+
+# ------------ plot -----------------------------------------------------------
+
+p <- ggplot(df_all, aes(x = nondep, y = dep)) +
+  geom_point(
+    size = 0.7,
+    alpha = 0.25,
+    stroke = 0,
+    color = "black"
+  ) +
+  geom_abline(
+    slope = 1,
+    intercept = 0,
+    linewidth = 0.5,
+    linetype = "dashed",
+    color = "firebrick"
+  ) +
+  geom_text(
+    data = cor_spears_df,
+    aes(x = x, y = y, label = label),
+    inherit.aes = FALSE,
+    hjust = 0,
+    vjust = 1.1,
+    size = 3.2,
+    family = "sans"
+  ) +
+  facet_wrap(~season, scales = "fixed", ncol = 5, drop = TRUE) +
+  coord_equal() +
+  labs(
+    x = "log2(median TPM + 1), Poly(A)-selected",
+    y = "log2(median TPM + 1)\n(rRNA/hemoglobin-depleted)",
+    title = "Expression concordance across seasons"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    panel.grid = element_blank(),
+    strip.background = element_rect(fill = "grey95", color = "black", linewidth = 0.4),
+    strip.text = element_text(face = "bold", size = 10),
+    axis.title = element_text(size = 11),
+    axis.text = element_text(size = 9, color = "black"),
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 12),
+    panel.border = element_rect(color = "black", linewidth = 0.5),
+    axis.line = element_line(color = "black", linewidth = 0.3)
+  )
+
+p
+
+ggsave("Supp_Figure3_final.pdf", plot = p, width = 10, height = 3.2, units = "in")
+```
+
+## Seq depth
+```{r}
+genes_detected <- colSums(tpm.mat > 1)  # or > 0.1
+df_detect <- data.frame(
+  sample = colnames(tpm.mat),
+  genes_detected = genes_detected
+) %>%
+  mutate(condition = if_else(grepl("^Depleted", sample), "Depleted", "Nondepleted"))
+
+ggplot(df_detect, aes(x = condition, y = genes_detected)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.7, size = 2) +
+  labs(
+    x = "Library type",
+    y = "Genes detected (TPM > 1)"
+  ) +
+  scale_x_discrete(labels = c(
+    "Depleted" = "rRNA/Globin depleted",
+    "Nondepleted" = "Poly(A) selected"
+  )) +
+  theme_bw(base_size = 14) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)
+  )
+```
+
+
+
+## DESEQ2 Function
+```{r}
+run_DESeq2 <- function(cts,metadata) {
+  library(DESeq2)
+  library(IHW)
+  
+  # Extract sample names (columns of count matrix)
+  samples <- colnames(cts)
+  
+  # Split sample names by "_"
+  # Example: "Depleted_Adak_Active_male"
+  bear <-  factor(str_split_fixed(samples, "_", 4)[,2])
+  season <-  factor(str_split_fixed(samples, "_", 4)[,3])
+  sex <-  factor(str_split_fixed(samples, "_", 4)[,4])
+  age <- factor(metadata$birth)
+  time <- factor(metadata$time)
+  
+  # Build DESeq2 metadata (colData)
+  coldata <- DataFrame(season=season, bear=bear,sex=sex,age=age, time=time)
+  rownames(coldata) <- colnames(cts)  
+  print(coldata)
+  
+  # Construct DESeq2 dataset object
+  dds <- DESeqDataSetFromMatrix(
+    countData = cts,
+    colData = coldata,
+    design = ~ sex+season  # model both bear and season, the more important condition should be last
+  )
+  
+  # Pre-filtering: remove genes with very low counts
+  keep <- rowSums(counts(dds) >= 10) >= 2 # keep genes with at least 10 reads in ≥2 samples
+  dds <- dds[keep, ]
+  
+  print(sum(keep)) 
+    
+  # Run DESeq2 normalization and DE analysis
+  dds <- DESeq(dds)
+  
+  return(dds)
+}
+
+# Split counts by depletion status
+cts.depleted <- cts_fixed %>% dplyr::select(starts_with("Depleted_"))
+cts.nondepleted <- cts_fixed %>% dplyr::select(starts_with("Nondepleted_"))
+
+
+# Run DESeq2 for each set
+dds.nondepleted <- run_DESeq2(cts.nondepleted,metadata_nondepleted)
+
+```
+
+# PCA
+
+function
+```{r}
+plot_PCA <- function(dds, gene_set){
+  library(ggplot2)
+  library(ggrepel)
+  
+  # Perform variance-stabilizing transformation (VST) on count data
+  # blind=TRUE should be used for comparing samples in a manner unbiased by prior information on samples
+  vsd <- varianceStabilizingTransformation(dds, blind = TRUE)
+  mat <- assay(vsd)
+  
+  # Remove bear-specific effects using limma's removeBatchEffect()
+  # Adjust for differences due to individual bears while preserving seasonal effects
+  mm <- model.matrix(~season, colData(vsd))
+  mat <- limma::removeBatchEffect(mat, batch = vsd$bear, design = mm)
+  assay(vsd) <- mat
+  
+  # Get PCA results including metadata
+  pca <- plotPCA(vsd, intgroup = c("season", "bear","sex"), returnData = TRUE, ntop = 2000)
+  percentVar <- round(100 * attr(pca, "percentVar"))
+  
+  #pca$label <- substring(str_split_fixed(pca$name, "_", 4)[,2], 1,1)
+  pca$label <- str_split_fixed(pca$name, "_", 4)[,2]
+  #pca$sex <- str_split_fixed(pca$bear_sex, "_", 2)[,2]
+  
+  # Color = season, Shape = bear
+  ggplot(pca, aes(x = PC1, y = PC2, color = season, shape = sex)) +
+    geom_point(size = 4) +
+    scale_color_manual(values = c("Active" = "indianred", "Fall" = "orange", "Hibernation" = "steelblue", 
+                                  "Spring" = "mediumseagreen", "SpringT2" = "plum")) +
+    #geom_text_repel(aes(label = label), size = 3, max.overlaps = 20) +
+    xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+    ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+    #ggtitle(paste0("Non-Depleted: PCA of Top 2,000 Genes")) +
+    theme_light(base_size = 18) +
+    theme(plot.title = element_text(hjust = 0.5),    
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank())
+  
+  ggsave("blood_pca.pdf", dpi = 600, width = 8, height = 5)
+
+}
+
+pca_nd <- plot_PCA(dds.nondepleted) 
+pca_nd
+
+```
+
+
+pca trajectory
+```{r}
+plot_PCA_trajectory <- function(dds) {
+  library(ggplot2)
+  library(ggrepel)
+  library(dplyr)
+  
+  # Variance stabilizing transformation
+  vsd <- varianceStabilizingTransformation(dds, blind = TRUE)
+  mat <- assay(vsd)
+
+  # Remove individual effect but keep seasonal effect
+  mm <- model.matrix(~season, colData(vsd))
+  mat <- limma::removeBatchEffect(mat, batch = vsd$bear, design = mm)
+  assay(vsd) <- mat
+  
+  # PCA
+  pca <- plotPCA(vsd, intgroup = c("season", "bear", "sex"), returnData = TRUE, ntop = 2000)
+  percentVar <- round(100 * attr(pca, "percentVar"))
+  
+  pca$bear_label <- substring(pca$bear,1, 1)
+  
+  # Extract bear ID for labeling
+  pca$label <- str_split_fixed(pca$name, "_", 4)[,2]
+  
+  # Define seasonal order explicitly (important for trajectory)
+  pca$season <- factor(pca$season, 
+                       levels = c("Active", "Fall", "Hibernation", "Spring", "SpringT2"))
+  
+  # Only keep bears with ≥ 2 samples so geom_path has something to connect
+  pca_for_path <- pca %>% group_by(bear_label) %>% filter(n() > 1)
+  
+  ggplot(pca, aes(x = PC1, y = PC2, color = season, shape = sex)) +
+    geom_path(
+      data = pca_for_path,
+      aes(group = bear_label),
+      linewidth = 1,
+      alpha = 0.6,
+      arrow = arrow(length = unit(0.15, "cm"))
+    ) +
+    geom_point(size = 4) +
+    #geom_text_repel(aes(label = label), size = 3, max.overlaps = 20) +
+    scale_color_manual(values = c(
+      "Active" = "indianred",
+      "Fall" = "orange",
+      "Hibernation" = "steelblue",
+      "Spring" = "mediumseagreen",
+      "SpringT2" = "plum"
+    )) +
+    xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+    ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+    facet_wrap(~ bear_label, ncol = 3) +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5)) +
+    ggtitle("PCA Trajectories Across Seasons (Top 2,000 Genes)")
+  ggsave("Supp_Figure5_final.pdf",width = 8, height = 5, dpi=600)
+}
+
+# Run for depleted and non-depleted
+plot_PCA_trajectory(dds.nondepleted)
+
+#plot_PCA_trajectory(dds.depleted)
+```
+
+# Extract results
+```{r}
+get_all_season_contrasts <- function(dds, seasons) {
+  library(IHW)
+  library(clusterProfiler)
+  library(tidyverse)
+  res_list <- list()
+  sig_res_list <- list()
+  resLFC_list <- list()
+  #resLFC <- lfcShrink(dds, coef="condition_treated_vs_untreated", type="apeglm")
+
+  for (i in seasons) {
+    for (j in seasons) {
+      if (i != j) {  # skip self-comparisons
+        contrast_name <- paste0(i, "_vs_", j)
+        print(paste0("Contrasting ", i, " vs ", j))
+        res <- results(dds, contrast = c("season", i, j),filterFun = ihw) # res_list[[contrast_name]]
+        
+        # symbol_to_entrez <- bitr(rownames(res), fromType = "SYMBOL", toType = "ENTREZID", OrgDb = bear_annot)
+        # res$ENTREZID <- symbol_to_entrez$ENTREZID
+      
+        
+        resOrdered <- res[order(res$pvalue), ]
+        
+        resOrdered_sig <- as.data.frame(resOrdered) %>% filter(padj < 0.05)
+        
+        
+        res_list[[contrast_name]] <- as.data.frame(res)
+        sig_res_list[[contrast_name]] <- resOrdered_sig
+      }
+    }
+  }
+  print("Done!")
+  
+  return(list(res = res_list, sig_res = sig_res_list))
+}
+
+# Usage
+seasons <- c("Active", "Fall","Hibernation","Spring","SpringT2")
+
+#depleted_res <- get_all_season_contrasts(dds.depleted, seasons)
+
+full_res <- get_all_season_contrasts(dds.nondepleted, seasons)
+nondepleted_res <- full_res$res
+nondepleted_resOrdered_sig <- full_res$sig_res
+```
+
+
+```{r}
+library(dplyr)
+library(purrr)
+
+# Define the comparisons you want to keep (only one direction)
+keep_comparisons <- c(
+  "Active_vs_Fall",
+  "Active_vs_Hibernation",
+  "Active_vs_Spring",
+  "Active_vs_SpringT2",
+  "Fall_vs_Hibernation",
+  "Fall_vs_Spring",
+  "Fall_vs_SpringT2",
+  "Hibernation_vs_Spring",
+  "Hibernation_vs_SpringT2",
+  "Spring_vs_SpringT2"
+)
+
+# Extract and combine results
+supp_table <- map_dfr(
+  keep_comparisons,
+  function(comp) {
+    df <- full_res$res[[comp]]
+    df$gene <- rownames(df)
+    df$comparison <- comp
+    df
+  }
+)
+
+# Reorder columns so comparison + gene come first
+supp_table <- supp_table %>%
+  select(comparison, gene, everything())
+
+# Save
+write.csv(supp_table, "pairwise_results.csv", row.names = FALSE)
+```
+
+
+
+```{r}
+# Extract all rownames from all significant results
+all_sig_genes <- unlist(
+  lapply(nondepleted_resOrdered_sig, function(df) rownames(df))
+)
+
+# Unique genes across all contrasts
+unique_sig_genes <- unique(all_sig_genes)
+
+# Count
+length(unique_sig_genes)
+table(all_sig_genes)
+```
+
+
+Alluvial: plotting the sequential comparisons
+```{r}
+sequential_df <- count_df %>%
+  filter(str_detect(season,
+                    "Active_vs_Fall|Fall_vs_Hibernation|Hibernation_vs_Spring|Spring_vs_SpringT2")) %>% # |SpringT2_vs_Active
+  filter(!str_detect(season, "Hibernation_vs_SpringT2"))  # exclude this comparison
+
+ggplot(sequential_df, aes(x = season, y = n, fill = direction)) +
+  geom_col(position = "stack") +
+  theme_bw() +
+  labs(x = "Comparison", y = "Number of Genes",
+       title = "DEG Counts per Comparison") +
+  scale_fill_manual(values = c("Up" = "indianred3",
+                               "Down" = "steelblue",
+                               "Not Sig" = "grey70")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
